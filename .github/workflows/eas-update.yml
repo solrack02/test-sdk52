@@ -97,16 +97,22 @@ jobs:
         run: |
           if grep -q 'Project successfully linked' eas_init_output.txt; then
             echo "Encontrado 'Project successfully linked'"
-            projectId=$(grep -oP 'Project successfully linked (ID: [a-f0-9-]+)' eas_init_output.txt | awk -F 'ID: ' '{print $2}' | tr -d ')')
+            projectId=$(grep -oE 'ID: [a-f0-9-]+' eas_init_output.txt | awk '{print $2}')
           elif grep -q 'Existing project found' eas_init_output.txt; then
             echo "Encontrado 'Existing project found'"
-            projectId=$(grep -oP 'Existing project found: @[^ ]* (ID: [a-f0-9-]+)' eas_init_output.txt | awk -F 'ID: ' '{print $2}' | tr -d ')')
+            projectId=$(grep -oE 'ID: [a-f0-9-]+' eas_init_output.txt | awk '{print $2}')
+          elif grep -q 'Project is already linked' eas_init_output.txt; then
+            echo "Encontrado 'Project is already linked'"
+            projectId=$(grep -oE 'ID: [a-f0-9-]+' eas_init_output.txt | awk '{print $2}')
           else
-            echo "Erro: Project ID não encontrado na saída."
+            echo "Erro: Project ID não encontrado na saída. Verifique a saída do eas init abaixo:"
+            cat eas_init_output.txt
             exit 1
           fi
+          
           echo "Project ID extraído: $projectId"
           echo "PROJECT_ID=$projectId" >> .env
+
       
       - name: Configure EAS project
         run: |
