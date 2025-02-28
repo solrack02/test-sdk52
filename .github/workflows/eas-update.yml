@@ -1,4 +1,3 @@
-
 name: Update expo
 on: [push]
 
@@ -21,9 +20,20 @@ jobs:
       - name: Read JSON file
         id: read_json
         run: |
-          tokenEas=$(jq -r '.tokenEas' .flaxboll/data.json)
-          userID=$(jq -r '.userID' .flaxboll/data.json)
-          projectID=$(jq -r '.projectID' .flaxboll/data.json)
+          if [ ! -f .flaxboll/data.json ]; then
+            echo "Erro: Arquivo .flaxboll/data.json não encontrado!"
+            exit 1
+          fi
+
+          tokenEas=$(jq -r '.tokenEas // empty' .flaxboll/data.json)
+          userID=$(jq -r '.userID // empty' .flaxboll/data.json)
+          projectID=$(jq -r '.projectID // empty' .flaxboll/data.json)
+
+          if [[ -z "$tokenEas" || -z "$userID" || -z "$projectID" ]]; then
+            echo "Erro: Variáveis do JSON estão vazias!"
+            exit 1
+          fi
+
           echo "tokenEas=$tokenEas" >> $GITHUB_ENV
           echo "userID=$userID" >> $GITHUB_ENV
           echo "projectID=$projectID" >> $GITHUB_ENV
@@ -51,22 +61,26 @@ jobs:
           yarn install
           sudo apt-get update && sudo apt-get install -y expect
 
+      - name: Verify EAS Token
+        run: |
+          eas whoami --token=${{ env.tokenEas }} || (echo "Erro: Token EAS inválido!" && exit 1)
+
       - name: Create expect script
         run: |
           echo '#!/usr/bin/expect -f
           set timeout 60
-          spawn eas init
+          spawn eas init --non-interactive
           expect {
             "Would you like to create a project for*" {
-              send "y"
+              send "y\r"
               exp_continue
             }
             "Link this project?*" {
-              send "y"
+              send "y\r"
               exp_continue
             }
             "Project is already linked to a different ID:*" {
-              send "y"
+              send "y\r"
               exp_continue
             }
             eof
@@ -104,7 +118,7 @@ jobs:
           spawn eas init --id $project_id --non-interactive
           expect {
             "Project is already linked to a different ID:*" {
-              send "y"
+              send "y\r"
               exp_continue
             }
             eof
@@ -115,16 +129,29 @@ jobs:
 
       - name: Create preview
         id: preview
-        uses: expo/expo-github-action/preview@v8
-        with:
-          command: eas update --auto
+        run: |
+          eas update --auto > eas_update_output.txt 2>&1 || true
+
+          qrCodeUrl=$(grep -oP '(https://expo.dev/updates/[^ ]+)' eas_update_output.txt | head -1)
+
+          if [[ -z "$qrCodeUrl" ]]; then
+            echo "Erro: QR Code não foi gerado!"
+            exit 1
+          fi
+
+          echo "qrCodeUrl=$qrCodeUrl" >> $GITHUB_ENV
 
       - name: Set Firebase Qr Code
         run: |
+          if [[ -z "${{ env.qrCodeUrl }}" ]]; then
+            echo "Erro: QR Code URL não foi encontrado!"
+            exit 1
+          fi
+
           curl --location 'https://fireupdateprjdata-7o72j76u5q-ue.a.run.app' \
           --header 'Content-Type: application/json' \
           --data "{
               \"projectID\": \"${{ env.projectID }}\",
               \"userID\": \"${{ env.userID }}\",
-              \"qrCodeUrl\": \"${{ steps.preview.outputs.qr }}\"
+              \"qrCodeUrl\": \"${{ env.qrCodeUrl }}\"
           }"
