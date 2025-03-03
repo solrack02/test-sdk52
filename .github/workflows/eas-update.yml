@@ -1,3 +1,4 @@
+
 name: Update expo
 on: [push]
 
@@ -17,34 +18,17 @@ jobs:
         with:
           node-version: '18'
 
-      - name: Update Expo CLI and EAS CLI
-        run: |
-          npm install -g expo-cli eas-cli
-          expo --version
-          eas --version
-
       - name: Read JSON file
         id: read_json
         run: |
-          if [ ! -f .flaxboll/data.json ]; then
-            echo "Erro: Arquivo .flaxboll/data.json não encontrado!"
-            exit 1
-          fi
-
-          tokenEas=$(jq -r '.tokenEas // empty' .flaxboll/data.json)
-          userID=$(jq -r '.userID // empty' .flaxboll/data.json)
-          projectID=$(jq -r '.projectID // empty' .flaxboll/data.json)
-
-          if [[ -z "$tokenEas" || -z "$userID" || -z "$projectID" ]]; then
-            echo "Erro: Variáveis do JSON estão vazias!"
-            exit 1
-          fi
-
+          tokenEas=$(jq -r '.tokenEas' .flaxboll/data.json)
+          userID=$(jq -r '.userID' .flaxboll/data.json)
+          projectID=$(jq -r '.projectID' .flaxboll/data.json)
           echo "tokenEas=$tokenEas" >> $GITHUB_ENV
           echo "userID=$userID" >> $GITHUB_ENV
           echo "projectID=$projectID" >> $GITHUB_ENV
         shell: bash
-
+         
       - name: Setup EAS
         uses: expo/expo-github-action@v8
         with:
@@ -67,76 +51,80 @@ jobs:
           yarn install
           sudo apt-get update && sudo apt-get install -y expect
 
-      - name: Install Google Sign-In dependency
-        run: yarn add @react-native-google-signin/google-signin
-
-      - name: Verify EAS Token
+      - name: Create expect script
         run: |
-          eas whoami --token=${{ env.tokenEas }} || (echo "Erro: Token EAS inválido!" && exit 1)
+          echo '#!/usr/bin/expect -f
+          set timeout 60
+          spawn eas init
+          expect {
+            "Would you like to create a project for*" {
+              send "y"
+              exp_continue
+            }
+            "Link this project?*" {
+              send "y"
+              exp_continue
+            }
+            "Project is already linked to a different ID:*" {
+              send "y"
+              exp_continue
+            }
+            eof
+          }' > eas_init_expect.sh
+          chmod +x eas_init_expect.sh
 
-      - name: Check for Expo config
+      - name: EAS Init
+        id: eas_init
         run: |
-          if [ ! -f app.json ] && [ ! -f app.config.js ]; then
-            echo "Erro: Nenhum arquivo de configuração do Expo encontrado!"
-            exit 1
-          fi
-
-      - name: Run EAS Init
-        run: |
-          eas init --non-interactive > eas_init_output.txt 2>&1 || true
+          ./eas_init_expect.sh > eas_init_output.txt 2>&1 || true
 
       - name: Extract Project ID and Write to .env
         id: extract_project_id
         run: |
           if grep -q 'Project successfully linked' eas_init_output.txt; then
             echo "Encontrado 'Project successfully linked'"
-            projectId=$(grep -oE 'ID: [a-f0-9-]+' eas_init_output.txt | awk '{print $2}')
+            projectId=$(grep -oP 'Project successfully linked (ID: [a-f0-9-]+)' eas_init_output.txt | awk -F 'ID: ' '{print $2}' | tr -d ')')
           elif grep -q 'Existing project found' eas_init_output.txt; then
             echo "Encontrado 'Existing project found'"
-            projectId=$(grep -oE 'ID: [a-f0-9-]+' eas_init_output.txt | awk '{print $2}')
-          elif grep -q 'Project is already linked' eas_init_output.txt; then
-            echo "Encontrado 'Project is already linked'"
-            projectId=$(grep -oE 'ID: [a-f0-9-]+' eas_init_output.txt | awk '{print $2}')
+            projectId=$(grep -oP 'Existing project found: @[^ ]* (ID: [a-f0-9-]+)' eas_init_output.txt | awk -F 'ID: ' '{print $2}' | tr -d ')')
           else
-            echo "Erro: Project ID não encontrado na saída. Verifique a saída do eas init abaixo:"
-            cat eas_init_output.txt
+            echo "Erro: Project ID não encontrado na saída."
             exit 1
           fi
-
           echo "Project ID extraído: $projectId"
           echo "PROJECT_ID=$projectId" >> .env
-
+      
       - name: Configure EAS project
         run: |
           source .env
           echo "Configurando o projeto EAS com o ID $PROJECT_ID"
-          eas init --id $PROJECT_ID --non-interactive || (echo "Erro ao configurar EAS!" && exit 1)
+          echo '#!/usr/bin/expect -f
+          set timeout 60
+          set project_id [lindex $argv 0]
+          spawn eas init --id $project_id --non-interactive
+          expect {
+            "Project is already linked to a different ID:*" {
+              send "y"
+              exp_continue
+            }
+            eof
+          }' > eas_configure_expect.sh
+
+          chmod +x eas_configure_expect.sh
+          ./eas_configure_expect.sh $PROJECT_ID
 
       - name: Create preview
         id: preview
-        run: |
-          eas update --auto > eas_update_output.txt 2>&1 || true
-
-          qrCodeUrl=$(grep -oE '(https://expo.dev/updates/[^ ]+)' eas_update_output.txt | head -1)
-
-          if [[ -z "$qrCodeUrl" ]]; then
-            echo "Erro: QR Code não foi gerado!"
-            exit 1
-          fi
-
-          echo "qrCodeUrl=$qrCodeUrl" >> $GITHUB_ENV
+        uses: expo/expo-github-action/preview@v8
+        with:
+          command: eas update --auto
 
       - name: Set Firebase Qr Code
         run: |
-          if [[ -z "${{ env.qrCodeUrl }}" ]]; then
-            echo "Erro: QR Code URL não foi encontrado!"
-            exit 1
-          fi
-
           curl --location 'https://fireupdateprjdata-7o72j76u5q-ue.a.run.app' \
           --header 'Content-Type: application/json' \
           --data "{
               \"projectID\": \"${{ env.projectID }}\",
               \"userID\": \"${{ env.userID }}\",
-              \"qrCodeUrl\": \"${{ env.qrCodeUrl }}\"
+              \"qrCodeUrl\": \"${{ steps.preview.outputs.qr }}\"
           }"
