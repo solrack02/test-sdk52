@@ -78,6 +78,9 @@ jobs:
         run: |
           ./eas_init_expect.sh > eas_init_output.txt 2>&1 || true
 
+      - name: Mostrar conteúdo de eas_init_output.txt
+        run: cat eas_init_output.txt
+
       - name: Extract Project ID and Write to .env
         id: extract_project_id
         run: |
